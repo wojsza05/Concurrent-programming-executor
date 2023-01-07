@@ -132,7 +132,7 @@ Aby zminimalizować trudności z obsługą pamięci i błędów w języku C:
   jeśli nie uruchomimy tylu zadań. Na przykład można mieć globalną tablicę
   `struct Task tasks[MAX_N_TASKS];`.
 - Wykonywane programy nigdy nie wypiszą znaku zerowego. Polecenia egzekutora
-  nigdy nie będą zawierać znaku zerowego, cudzysłowów, ani znaku \. W
+  nigdy nie będą zawierać znaku zerowego, cudzysłowów, ani znaku \\. W
   szczególności argumenty programów są po prostu odzielone spacjami i można je
   przetworzyć używając funkcji `split_string` z `utils.h`.
 - W przypadku dowolnego błędu można po prostu zakończyć działanie egzekutora,
