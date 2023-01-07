@@ -81,7 +81,6 @@ void *listener(void *arg) {
             ASSERT_ZERO(pthread_mutex_unlock(&mutex));
         }
     }
-//    fprintf(stderr, "Listener finished with result: %s\n", result);
 
     free(arg);
     return NULL;
@@ -98,6 +97,7 @@ void *run_process(void *arg) {
         pipe(tasks[id].pipe_dsc_err) == -1)
         syserr("pipe");
 
+//    ASSERT_ZERO(pthread_mutex_unlock(&mutex));
     pid_t pid = fork();
     ASSERT_SYS_OK(pid);
 
@@ -110,7 +110,10 @@ void *run_process(void *arg) {
         ASSERT_SYS_OK(close(tasks[id].pipe_dsc_out[1]));
         ASSERT_SYS_OK(close(tasks[id].pipe_dsc_err[1]));
 
-        ASSERT_ZERO(pthread_mutex_unlock(&mutex));
+//        tasks[id].pid = getpid();
+//        printf("Task %d started: pid %d.\n", id, getpid());
+
+//        ASSERT_ZERO(pthread_mutex_unlock(&mutex));
         ASSERT_SYS_OK(execvp(program_name, program_args));
     } else {
         // Parent process
@@ -223,19 +226,30 @@ int main() {
             ASSERT_ZERO(pthread_mutex_lock(&mutex));
 //            fprintf(stderr, "out command\n");
             int id = atoi(words[1]);
+            if (id < 0 || id >= n_tasks)
+                syserr("Invalid task id: %d", id);
+
             printf("Task %d stdout: '%s'.\n", id, tasks[id].last_stdout);
             ASSERT_ZERO(pthread_mutex_unlock(&mutex));
         } else if (strcmp(words[0], "err") == 0) {
             ASSERT_ZERO(pthread_mutex_lock(&mutex));
 //            fprintf(stderr, "err command\n");
             int id = atoi(words[1]);
+            if (id < 0 || id >= n_tasks)
+                syserr("Invalid task id: %d", id);
+
             printf("Task %d stderr: '%s'.\n", id, tasks[id].last_stderr);
             ASSERT_ZERO(pthread_mutex_unlock(&mutex));
         } else if (strcmp(words[0], "kill") == 0) {
+            ASSERT_ZERO(pthread_mutex_lock(&mutex));
 //            fprintf(stderr, "kill command\n");
             int id = atoi(words[1]);
+            if (id < 0 || id >= n_tasks)
+                syserr("Invalid task id: %d", id);
+
             if (kill(tasks[id].pid, SIGINT) == -1)
                 syserr("kill");
+            ASSERT_ZERO(pthread_mutex_unlock(&mutex));
         } else if (strcmp(words[0], "sleep") == 0) {
 //            fprintf(stderr, "sleep command\n");
             int time = atoi(words[1]);
@@ -245,9 +259,11 @@ int main() {
             free_split_string(words);
             for (int i = 0; i < n_tasks; i++) {
 //                fprintf(stderr, "Waiting for task %d with pid %d to end.\n", i, tasks[i].pid);
+                ASSERT_ZERO(pthread_mutex_lock(&mutex));
                 if (tasks[i].pid != -1 && kill(tasks[i].pid, SIGKILL) == -1)
                     syserr("quit123");
-                ASSERT_ZERO(pthread_join(threads[i], NULL));
+                ASSERT_ZERO(pthread_mutex_unlock(&mutex));
+                ASSERT_ZERO(pthread_join(threads[i],NULL));
             }
             ASSERT_ZERO(pthread_attr_destroy(&attr));
             ASSERT_ZERO(pthread_mutex_destroy(&mutex));
