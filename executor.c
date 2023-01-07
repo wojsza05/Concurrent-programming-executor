@@ -34,6 +34,8 @@ struct Listener_info {
     char *result;
 };
 
+pthread_mutex_t mutex;
+
 void *listener(void *arg) {
     int pipe_dsc = ((struct Listener_info *) arg)->pipe_dsc;
     char *result = ((struct Listener_info *) arg)->result;
@@ -48,12 +50,14 @@ void *listener(void *arg) {
         for (int i = 0; i < n_read; ++i) {
             previous_buffer[previous_buffer_size++] = buffer[i];
             if (buffer[i] == '\n') {
+                ASSERT_ZERO(pthread_mutex_lock(&mutex));
                 for (int position = last_newline + 1;
                      position < previous_buffer_size; ++position)
                     result[position - last_newline - 1] =
                             previous_buffer[position];
                 result[previous_buffer_size - last_newline - 2] = '\0';
                 last_newline = previous_buffer_size - 1;
+                ASSERT_ZERO(pthread_mutex_unlock(&mutex));
             }
         }
 
@@ -71,10 +75,13 @@ void *listener(void *arg) {
 
     if (n_read == 0) {
         if (previous_buffer_size != 0) {
+            ASSERT_ZERO(pthread_mutex_lock(&mutex));
             for (int i = 0; i <= previous_buffer_size; ++i)
                 result[i] = previous_buffer[i];
+            ASSERT_ZERO(pthread_mutex_unlock(&mutex));
         }
-}
+    }
+//    fprintf(stderr, "Listener finished with result: %s\n", result);
 
     free(arg);
     return NULL;
@@ -103,6 +110,7 @@ void *run_process(void *arg) {
         ASSERT_SYS_OK(close(tasks[id].pipe_dsc_out[1]));
         ASSERT_SYS_OK(close(tasks[id].pipe_dsc_err[1]));
 
+        ASSERT_ZERO(pthread_mutex_unlock(&mutex));
         ASSERT_SYS_OK(execvp(program_name, program_args));
     } else {
         // Parent process
@@ -128,6 +136,8 @@ void *run_process(void *arg) {
         err_info->pipe_dsc = tasks[id].pipe_dsc_err[0];
         err_info->result = tasks[id].last_stderr;
 
+        ASSERT_ZERO(pthread_mutex_unlock(&mutex));
+
         ASSERT_ZERO(pthread_create(&out_thread, &attr, listener, out_info));
         ASSERT_ZERO(pthread_create(&err_thread, &attr, listener, err_info));
         ASSERT_ZERO(pthread_attr_destroy(&attr));
@@ -138,6 +148,7 @@ void *run_process(void *arg) {
         int status;
         ASSERT_SYS_OK(waitpid(pid, &status, 0));
 
+        ASSERT_ZERO(pthread_mutex_lock(&mutex));
         if (WIFEXITED(status))
             printf("Task %d ended: status %d.\n", id, WEXITSTATUS(status));
         else
@@ -146,6 +157,7 @@ void *run_process(void *arg) {
         tasks[id].pid = -1;
         ASSERT_SYS_OK(close(tasks[id].pipe_dsc_out[0]));
         ASSERT_SYS_OK(close(tasks[id].pipe_dsc_err[0]));
+        ASSERT_ZERO(pthread_mutex_unlock(&mutex));
     }
 
     free(program_name);
@@ -166,6 +178,8 @@ int main() {
     ASSERT_ZERO(pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_JOINABLE));
     pthread_t threads[MAX_N_TASKS];
 
+    ASSERT_ZERO(pthread_mutex_init(&mutex, NULL));
+
     while (read_line(line, MAX_LINE, stdin)) {
         // Remove trailing newline
         line[strlen(line) - 1] = '\0';
@@ -181,6 +195,7 @@ int main() {
 
         // Check if the line is a command
         if (strcmp(words[0], "run") == 0) {
+            ASSERT_ZERO(pthread_mutex_lock(&mutex));
 //            fprintf(stderr, "run command\n");
 
             struct Program_info *programArguments
@@ -205,13 +220,17 @@ int main() {
             ASSERT_ZERO(pthread_create(&threads[n_tasks++], &attr,
                                        run_process, programArguments));
         } else if (strcmp(words[0], "out") == 0) {
+            ASSERT_ZERO(pthread_mutex_lock(&mutex));
 //            fprintf(stderr, "out command\n");
             int id = atoi(words[1]);
             printf("Task %d stdout: '%s'.\n", id, tasks[id].last_stdout);
+            ASSERT_ZERO(pthread_mutex_unlock(&mutex));
         } else if (strcmp(words[0], "err") == 0) {
+            ASSERT_ZERO(pthread_mutex_lock(&mutex));
 //            fprintf(stderr, "err command\n");
             int id = atoi(words[1]);
             printf("Task %d stderr: '%s'.\n", id, tasks[id].last_stderr);
+            ASSERT_ZERO(pthread_mutex_unlock(&mutex));
         } else if (strcmp(words[0], "kill") == 0) {
 //            fprintf(stderr, "kill command\n");
             int id = atoi(words[1]);
@@ -231,6 +250,7 @@ int main() {
                 ASSERT_ZERO(pthread_join(threads[i], NULL));
             }
             ASSERT_ZERO(pthread_attr_destroy(&attr));
+            ASSERT_ZERO(pthread_mutex_destroy(&mutex));
             exit(0);
         }
 
@@ -245,5 +265,6 @@ int main() {
         ASSERT_ZERO(pthread_join(threads[i], NULL));
     }
     ASSERT_ZERO(pthread_attr_destroy(&attr));
+    ASSERT_ZERO(pthread_mutex_destroy(&mutex));
     return 0;
 }
