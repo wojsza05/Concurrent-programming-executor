@@ -5,6 +5,8 @@
 #include <sys/wait.h>
 #include <unistd.h>
 #include <pthread.h>
+#include <sys/mman.h>
+#include <semaphore.h>
 
 #include "err.h"
 #include "utils.h"
@@ -21,22 +23,30 @@ struct Task {
     int pipe_dsc_err[2];
 } tasks[MAX_N_TASKS];
 
+// Storage compartment
+struct SharedStorage {
+    sem_t mutex;
+};
+
 // A structure that stores information about one command
 struct Program_info {
     int id;
     char *program_name;
     char **program_args;
+    struct SharedStorage *storage;
 };
 
 // A structure that stores information about one listener
 struct Listener_info {
     int pipe_dsc;
     char *result;
+    struct SharedStorage *storage;
 };
 
 void *listener(void *arg) {
     int pipe_dsc = ((struct Listener_info *) arg)->pipe_dsc;
     char *result = ((struct Listener_info *) arg)->result;
+    struct SharedStorage *storage = ((struct Listener_info *) arg)->storage;
 
     char buffer[MAX_LINE];
     int n_read;
@@ -82,10 +92,11 @@ void *listener(void *arg) {
 
 // Function that runs new process
 void *run_process(void *arg) {
-//    fprintf(stderr, "run_process\n");
+    fprintf(stderr, "run_process\n");
     int id = ((struct Program_info *) arg)->id;
     char *program_name = ((struct Program_info *) arg)->program_name;
     char **program_args = ((struct Program_info *) arg)->program_args;
+    struct SharedStorage *storage = ((struct Program_info *) arg)->storage;
 
     if (pipe(tasks[id].pipe_dsc_out) == -1 ||
         pipe(tasks[id].pipe_dsc_err) == -1)
@@ -96,23 +107,54 @@ void *run_process(void *arg) {
 
     if (pid == 0) {
         // Child process
+
+        int value;
+        ASSERT_SYS_OK(sem_getvalue(&storage->mutex, &value));
+        fprintf(stderr, "Child process, value: %d\n", value);
+
         ASSERT_SYS_OK(close(tasks[id].pipe_dsc_out[0]));
         ASSERT_SYS_OK(close(tasks[id].pipe_dsc_err[0]));
+
+        ASSERT_SYS_OK(sem_getvalue(&storage->mutex, &value));
+        fprintf(stderr, "Child process2, value: %d\n", value);
+
         ASSERT_SYS_OK(dup2(tasks[id].pipe_dsc_out[1], STDOUT_FILENO));
         ASSERT_SYS_OK(dup2(tasks[id].pipe_dsc_err[1], STDERR_FILENO));
+
+        ASSERT_SYS_OK(sem_getvalue(&storage->mutex, &value));
+        fprintf(stderr, "Child process3, value: %d\n", value);
+
         ASSERT_SYS_OK(close(tasks[id].pipe_dsc_out[1]));
         ASSERT_SYS_OK(close(tasks[id].pipe_dsc_err[1]));
+
+        tasks[id].pid = getpid();
+        printf("Task %d started: pid %d.\n", id, getpid());
+
+        ASSERT_SYS_OK(sem_getvalue(&storage->mutex, &value));
+        fprintf(stderr, "Child process4, value: %d\n", value);
+
+        ASSERT_SYS_OK(sem_post(&storage->mutex));
+
+        ASSERT_SYS_OK(sem_getvalue(&storage->mutex, &value));
+        fprintf(stderr, "Child process5, value: %d\n", value);
 
         ASSERT_SYS_OK(execvp(program_name, program_args));
     } else {
         // Parent process
+
+        int value;
+        ASSERT_SYS_OK(sem_getvalue(&storage->mutex, &value));
+        fprintf(stderr, "Parent process, value: %d\n", value);
+
+        ASSERT_SYS_OK(sem_wait(&storage->mutex));
+
         ASSERT_SYS_OK(close(tasks[id].pipe_dsc_out[1]));
         ASSERT_SYS_OK(close(tasks[id].pipe_dsc_err[1]));
 //        set_close_on_exec(tasks[id].pipe_dsc_out[0], true);
 //        set_close_on_exec(tasks[id].pipe_dsc_err[0], true);
 
-        tasks[id].pid = pid;
-        printf("Task %d started: pid %d.\n", id, pid);
+//        tasks[id].pid = pid;
+//        printf("Task %d started: pid %d.\n", id, pid);
 
         pthread_attr_t attr;
         ASSERT_ZERO(pthread_attr_init(&attr));
@@ -123,20 +165,35 @@ void *run_process(void *arg) {
         struct Listener_info *out_info = malloc(sizeof(struct Listener_info));
         out_info->pipe_dsc = tasks[id].pipe_dsc_out[0];
         out_info->result = tasks[id].last_stdout;
+        out_info->storage = storage;
 
         struct Listener_info *err_info = malloc(sizeof(struct Listener_info));
         err_info->pipe_dsc = tasks[id].pipe_dsc_err[0];
         err_info->result = tasks[id].last_stderr;
+        err_info->storage = storage;
+
+        ASSERT_SYS_OK(sem_getvalue(&storage->mutex, &value));
+        fprintf(stderr, "Parent process2, value: %d\n", value);
 
         ASSERT_ZERO(pthread_create(&out_thread, &attr, listener, out_info));
         ASSERT_ZERO(pthread_create(&err_thread, &attr, listener, err_info));
         ASSERT_ZERO(pthread_attr_destroy(&attr));
 
+        ASSERT_SYS_OK(sem_post(&storage->mutex));
+        ASSERT_SYS_OK(sem_getvalue(&storage->mutex, &value));
+        fprintf(stderr, "Parent process3, value: %d\n", value);
+
         ASSERT_ZERO(pthread_join(out_thread, NULL));
         ASSERT_ZERO(pthread_join(err_thread, NULL));
 
+        ASSERT_SYS_OK(sem_getvalue(&storage->mutex, &value));
+        fprintf(stderr, "Parent process4, value: %d\n", value);
+
         int status;
         ASSERT_SYS_OK(waitpid(pid, &status, 0));
+
+        ASSERT_SYS_OK(sem_getvalue(&storage->mutex, &value));
+        fprintf(stderr, "Parent process5, value: %d\n", value);
 
         if (WIFEXITED(status))
             printf("Task %d ended: status %d.\n", id, WEXITSTATUS(status));
@@ -146,6 +203,9 @@ void *run_process(void *arg) {
         tasks[id].pid = -1;
         ASSERT_SYS_OK(close(tasks[id].pipe_dsc_out[0]));
         ASSERT_SYS_OK(close(tasks[id].pipe_dsc_err[0]));
+
+        ASSERT_SYS_OK(sem_getvalue(&storage->mutex, &value));
+        fprintf(stderr, "Parent process6, value: %d\n", value);
     }
 
     free(program_name);
@@ -166,6 +226,15 @@ int main() {
     ASSERT_ZERO(pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_JOINABLE));
     pthread_t threads[MAX_N_TASKS];
 
+    struct SharedStorage* shared_storage = mmap(NULL,
+            sizeof(struct SharedStorage),
+            PROT_READ | PROT_WRITE,
+            MAP_SHARED | MAP_ANONYMOUS,
+            -1, 0);
+    if (shared_storage == MAP_FAILED)
+        syserr("mmap");
+    ASSERT_SYS_OK(sem_init(&shared_storage->mutex, 1, 1));
+
     while (read_line(line, MAX_LINE, stdin)) {
         // Remove trailing newline
         line[strlen(line) - 1] = '\0';
@@ -181,6 +250,10 @@ int main() {
 
         // Check if the line is a command
         if (strcmp(words[0], "run") == 0) {
+            ASSERT_SYS_OK(sem_wait(&shared_storage->mutex));
+
+            int value;
+            ASSERT_SYS_OK(sem_getvalue(&shared_storage->mutex, &value));
 //            fprintf(stderr, "run command\n");
 
             struct Program_info *programArguments
@@ -201,6 +274,7 @@ int main() {
                 strcpy(programArguments->program_args[i], words[i + 1]);
             }
             programArguments->program_args[count_args] = NULL;
+            programArguments->storage = shared_storage;
 
             ASSERT_ZERO(pthread_create(&threads[n_tasks++], &attr,
                                        run_process, programArguments));
@@ -231,6 +305,8 @@ int main() {
                 ASSERT_ZERO(pthread_join(threads[i], NULL));
             }
             ASSERT_ZERO(pthread_attr_destroy(&attr));
+            ASSERT_SYS_OK(munmap(shared_storage, sizeof(struct SharedStorage)));
+            ASSERT_SYS_OK(sem_destroy(&shared_storage->mutex));
             exit(0);
         }
 
@@ -245,5 +321,7 @@ int main() {
         ASSERT_ZERO(pthread_join(threads[i], NULL));
     }
     ASSERT_ZERO(pthread_attr_destroy(&attr));
+    ASSERT_SYS_OK(munmap(shared_storage, sizeof(struct SharedStorage)));
+    ASSERT_SYS_OK(sem_destroy(&shared_storage->mutex));
     return 0;
 }
