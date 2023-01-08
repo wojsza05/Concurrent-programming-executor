@@ -39,6 +39,7 @@ pthread_mutex_t mutex;
 void *listener(void *arg) {
     int pipe_dsc = ((struct Listener_info *) arg)->pipe_dsc;
     char *result = ((struct Listener_info *) arg)->result;
+    free(arg);
 
     char buffer[MAX_LINE];
     int n_read;
@@ -81,8 +82,6 @@ void *listener(void *arg) {
             ASSERT_ZERO(pthread_mutex_unlock(&mutex));
         }
     }
-
-//    free(arg);
     return NULL;
 }
 
@@ -105,15 +104,14 @@ void *run_listeners(void *arg) {
     err_info->pipe_dsc = tasks[id].pipe_dsc_err[0];
     err_info->result = tasks[id].last_stderr;
 
+    ASSERT_ZERO(pthread_mutex_lock(&mutex));
     ASSERT_ZERO(pthread_create(&out_thread, &attr, listener, out_info));
     ASSERT_ZERO(pthread_create(&err_thread, &attr, listener, err_info));
+    ASSERT_ZERO(pthread_mutex_unlock(&mutex));
 
     ASSERT_ZERO(pthread_join(out_thread, NULL));
     ASSERT_ZERO(pthread_join(err_thread, NULL));
     ASSERT_ZERO(pthread_attr_destroy(&attr));
-
-    free(out_info);
-    free(err_info);
 
     int status;
     ASSERT_SYS_OK(waitpid(tasks[id].pid, &status, 0));
@@ -163,12 +161,11 @@ void *run_process(void *arg) {
         printf("Task %d started: pid %d.\n", id, pid);
     }
 
-//    free(program_name);
-//    for (int i = 0; program_args[i] != NULL; ++i)
-//        free(program_args[i]);
-//    free(program_args);
-//    free(arg);
-
+    free(program_name);
+    for (int i = 0; program_args[i] != NULL; ++i)
+        free(program_args[i]);
+    free(program_args);
+    free(arg);
     return NULL;
 }
 
@@ -218,19 +215,12 @@ int main() {
                                        run_process, programArguments));
             ASSERT_ZERO(pthread_join(run_process_thread, NULL));
 
-            free(programArguments->program_name);
-            for (int i = 0; programArguments->program_args[i] != NULL; ++i)
-                free(programArguments->program_args[i]);
-            free(programArguments->program_args);
-            free(programArguments);
-
-            ASSERT_ZERO(pthread_mutex_unlock(&mutex));
-
             int *id = malloc(sizeof(int));
             *id = n_tasks;
             ASSERT_ZERO(pthread_create(&threads[n_tasks], &attr,
                                        run_listeners, id));
             ++n_tasks;
+            ASSERT_ZERO(pthread_mutex_unlock(&mutex));
         } else if (strcmp(words[0], "out") == 0) {
             ASSERT_ZERO(pthread_mutex_lock(&mutex));
             int id = atoi(words[1]);
@@ -256,17 +246,15 @@ int main() {
             kill(tasks[id].pid, SIGINT);
             ASSERT_ZERO(pthread_mutex_unlock(&mutex));
         } else if (strcmp(words[0], "sleep") == 0) {
-//            fprintf(stderr, "sleep command\n");
             int time = atoi(words[1]);
             usleep(time * 1000);
         } else if (strcmp(words[0], "quit") == 0) {
-            // quit
             free_split_string(words);
             for (int i = 0; i < n_tasks; i++) {
                 ASSERT_ZERO(pthread_mutex_lock(&mutex));
                 kill(tasks[i].pid, SIGKILL);
                 ASSERT_ZERO(pthread_mutex_unlock(&mutex));
-                ASSERT_ZERO(pthread_join(threads[i],NULL));
+                ASSERT_ZERO(pthread_join(threads[i], NULL));
             }
             ASSERT_ZERO(pthread_attr_destroy(&attr));
             ASSERT_ZERO(pthread_mutex_destroy(&mutex));
