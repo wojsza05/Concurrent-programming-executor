@@ -157,6 +157,9 @@ void *run_process(void *arg) {
         ASSERT_SYS_OK(close(tasks[id].pipe_dsc_out[1]));
         ASSERT_SYS_OK(close(tasks[id].pipe_dsc_err[1]));
 
+        set_close_on_exec(tasks[id].pipe_dsc_out[0], true);
+        set_close_on_exec(tasks[id].pipe_dsc_err[0], true);
+
         tasks[id].pid = pid;
         printf("Task %d started: pid %d.\n", id, pid);
     }
