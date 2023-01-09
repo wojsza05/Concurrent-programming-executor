@@ -11,6 +11,7 @@
 
 #define MAX_LINE 1024
 #define MAX_N_TASKS 4096
+#define MAX_ENDED_TASK_LINE 64
 
 // A structure that stores information about one task
 struct Task {
@@ -35,6 +36,9 @@ struct Listener_info {
 };
 
 pthread_mutex_t mutex;
+bool command_is_running = false;
+char ended_tasks[MAX_N_TASKS * MAX_ENDED_TASK_LINE];
+int ended_tasks_length = 0;
 
 void *listener(void *arg) {
     int pipe_dsc = ((struct Listener_info *) arg)->pipe_dsc;
@@ -116,11 +120,23 @@ void *run_listeners(void *arg) {
     int status;
     ASSERT_SYS_OK(waitpid(tasks[id].pid, &status, 0));
 
+    char ended_task_message[MAX_ENDED_TASK_LINE];
+
     ASSERT_ZERO(pthread_mutex_lock(&mutex));
+
     if (WIFEXITED(status))
-        printf("Task %d ended: status %d.\n", id, WEXITSTATUS(status));
+        sprintf(ended_task_message, "Task %d ended: status %d.\n", id,
+                WEXITSTATUS(status));
     else
-        printf("Task %d ended: signalled.\n", id);
+        sprintf(ended_task_message, "Task %d ended: signalled.\n", id);
+
+    if (command_is_running) {
+        for (int i = 0; i < strlen(ended_task_message); ++i)
+            ended_tasks[ended_tasks_length++] = ended_task_message[i];
+        ended_tasks[ended_tasks_length] = '\0';
+    }
+    else
+        printf("%s", ended_task_message);
 
     ASSERT_SYS_OK(close(tasks[id].pipe_dsc_out[0]));
     ASSERT_SYS_OK(close(tasks[id].pipe_dsc_err[0]));
@@ -161,7 +177,6 @@ void *run_process(void *arg) {
         set_close_on_exec(tasks[id].pipe_dsc_err[0], true);
 
         tasks[id].pid = pid;
-        printf("Task %d started: pid %d.\n", id, pid);
     }
 
     free(program_name);
@@ -175,6 +190,7 @@ void *run_process(void *arg) {
 int main() {
     int n_tasks = 0;
     char line[MAX_LINE];
+    ended_tasks[0] = '\0';
 
     pthread_attr_t attr;
     ASSERT_ZERO(pthread_attr_init(&attr));
@@ -184,6 +200,10 @@ int main() {
     ASSERT_ZERO(pthread_mutex_init(&mutex, NULL));
 
     while (read_line(line, MAX_LINE, stdin)) {
+        ASSERT_ZERO(pthread_mutex_lock(&mutex));
+        command_is_running = true;
+        ASSERT_ZERO(pthread_mutex_unlock(&mutex));
+
         // Remove trailing newline
         line[strlen(line) - 1] = '\0';
 
@@ -217,6 +237,7 @@ int main() {
             ASSERT_ZERO(pthread_create(&run_process_thread, &attr,
                                        run_process, programArguments));
             ASSERT_ZERO(pthread_join(run_process_thread, NULL));
+            printf("Task %d started: pid %d.\n", n_tasks, tasks[n_tasks].pid);
 
             int *id = malloc(sizeof(int));
             *id = n_tasks;
@@ -252,6 +273,7 @@ int main() {
             int time = atoi(words[1]);
             usleep(time * 1000);
         } else if (strcmp(words[0], "quit") == 0) {
+            command_is_running = false;
             free_split_string(words);
             for (int i = 0; i < n_tasks; i++) {
                 ASSERT_ZERO(pthread_mutex_lock(&mutex));
@@ -266,6 +288,16 @@ int main() {
 
         // Free the memory allocated for the words
         free_split_string(words);
+
+        ASSERT_ZERO(pthread_mutex_lock(&mutex));
+        if (ended_tasks_length > 0) {
+            printf("%s", ended_tasks);
+            ended_tasks[0] = '\0';
+            ended_tasks_length = 0;
+        }
+
+        command_is_running = false;
+        ASSERT_ZERO(pthread_mutex_unlock(&mutex));
     }
 
     for (int i = 0; i < n_tasks; i++) {
