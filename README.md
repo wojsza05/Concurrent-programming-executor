@@ -1,4 +1,13 @@
-# Zadanie 'Egzekutor'
+# Task 'Executor'
+
+Project prepared as part of concurrent programming classes at MIM UW in the 
+academic year 2022/2023.
+
+The content of the task coming from the authors has been posted below 
+(unfortunately, it is only available in Polish). The files `utils.*`, `err.*`, 
+`.clang*` and `CMakeLists.txt` were provided by the authors of the task.
+
+# The content of the task
 
 Sara rozwija pewien algorytm i pisze programy, które wykonują się długo,
 wypisując co jakiś czas informacje o postępach. Sara chciałaby testować swoje
